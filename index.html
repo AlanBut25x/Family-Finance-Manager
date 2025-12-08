@@ -1,0 +1,1438 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#f8fafc">
+    <title>家庭與個人記帳管理器</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Noto Sans TC', 'sans-serif'] },
+                    colors: {
+                        personal: { 50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 400: '#60a5fa', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8' },
+                        shared: { 50: '#fffbeb', 100: '#fef3c7', 200: '#fde68a', 400: '#fbbf24', 500: '#f59e0b', 600: '#d97706', 700: '#b45309' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        * {
+            -webkit-tap-highlight-color: transparent;
+            font-family: 'Noto Sans TC', sans-serif;
+        }
+
+        .calc-btn:active {
+            transform: scale(0.95);
+        }
+
+        .safe-bottom {
+            padding-bottom: env(safe-area-inset-bottom, 16px);
+        }
+
+        input:focus {
+            outline: none;
+        }
+
+        .glass {
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+    <div id="app">
+        <!-- 載入畫面 -->
+        <div v-if="loading"
+            class="fixed inset-0 bg-gradient-to-br from-blue-50 to-amber-50 flex items-center justify-center z-50">
+            <div class="text-center">
+                <div class="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto">
+                </div>
+                <p class="mt-4 text-slate-500">{{ loadingMessage }}</p>
+            </div>
+        </div>
+
+        <!-- 主應用 -->
+        <div v-else class="flex flex-col h-screen max-w-lg mx-auto transition-colors duration-300"
+            :class="isLoggedIn ? (mode === 'personal' ? 'bg-blue-50' : 'bg-amber-50') : 'bg-gradient-to-br from-blue-50 to-amber-50'">
+            <!-- 頂部導航 -->
+            <header v-if="isLoggedIn" class="px-4 py-3 flex items-center justify-between shadow-sm"
+                :class="mode === 'personal' ? 'bg-blue-500 text-white' : 'bg-amber-500 text-white'">
+                <div class="flex items-center gap-2">
+                    <i :class="mode === 'personal' ? 'ri-user-line' : 'ri-group-line'" class="text-xl"></i>
+                    <span class="font-bold">{{ mode === 'personal' ? '個人記帳' : '共享帳本' }}</span>
+                </div>
+                <button @click="toggleMode" class="px-4 py-1.5 rounded-full text-sm font-medium shadow-sm"
+                    :class="mode === 'personal' ? 'bg-amber-400 text-amber-900' : 'bg-blue-400 text-white'">
+                    切換至{{ mode === 'personal' ? '共享' : '個人' }}
+                </button>
+            </header>
+
+            <!-- 公家錢包餘額 (共享模式) -->
+            <div v-if="isLoggedIn && mode === 'shared'"
+                class="bg-gradient-to-r from-amber-400 to-orange-400 px-4 py-3 flex justify-between items-center shadow-sm">
+                <span class="text-sm text-white"><i class="ri-wallet-3-line mr-1"></i>公家錢包</span>
+                <span class="font-bold text-xl text-white">${{ publicWallet }}</span>
+            </div>
+
+            <!-- 主內容區 -->
+            <main class="flex-1 overflow-y-auto pb-20">
+                <!-- 登入畫面 -->
+                <div v-if="!isLoggedIn" class="p-6 flex flex-col items-center justify-center min-h-full">
+                    <div
+                        class="w-24 h-24 bg-gradient-to-br from-blue-500 to-amber-500 rounded-3xl flex items-center justify-center mb-6 shadow-lg">
+                        <i class="ri-wallet-3-line text-5xl text-white"></i>
+                    </div>
+                    <h1 class="text-2xl font-bold mb-2 text-slate-800">家庭與個人記帳</h1>
+                    <p class="text-slate-500 mb-8">雲端同步 · 多人共享 · 智慧分帳</p>
+                    <p :class="dbReady ? 'text-green-600' : 'text-red-500'" class="text-sm mb-6">
+                        <i :class="dbReady ? 'ri-check-line' : 'ri-error-warning-line'" class="mr-1"></i>
+                        {{ dbReady ? 'Supabase 已連線' : '資料庫未連線' }}
+                    </p>
+                    <div class="w-full max-w-sm space-y-3">
+                        <button @click="showCreateFamily = true"
+                            class="w-full py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-medium shadow-md">
+                            <i class="ri-add-circle-line mr-2"></i>建立新家庭
+                        </button>
+                        <button @click="showJoinFamily = true"
+                            class="w-full py-3 bg-white hover:bg-slate-50 text-slate-700 rounded-xl font-medium border border-slate-200 shadow-sm">
+                            <i class="ri-login-box-line mr-2"></i>加入現有家庭
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Tab 1: 輸入 -->
+                <div v-else-if="activeTab === 'input'" class="p-4">
+                    <!-- 支出/收入切換 (僅個人模式顯示) -->
+                    <div v-if="mode === 'personal'" class="flex gap-2 mb-4">
+                        <button @click="transactionType = 'expense'"
+                            class="flex-1 py-2.5 rounded-xl font-medium shadow-sm transition-all"
+                            :class="transactionType === 'expense' ? 'bg-red-500 text-white' : 'bg-white text-slate-600 border border-slate-200'">
+                            <i class="ri-subtract-line mr-1"></i>支出
+                        </button>
+                        <button @click="transactionType = 'income'"
+                            class="flex-1 py-2.5 rounded-xl font-medium shadow-sm transition-all"
+                            :class="transactionType === 'income' ? 'bg-green-500 text-white' : 'bg-white text-slate-600 border border-slate-200'">
+                            <i class="ri-add-line mr-1"></i>收入
+                        </button>
+                    </div>
+
+                    <!-- 共享模式：誰付錢選擇 -->
+                    <div v-if="mode === 'shared'" class="bg-amber-100 rounded-xl p-3 mb-4 border border-amber-200">
+                        <p class="text-sm text-amber-700 mb-2 font-medium">💰 誰付錢？</p>
+                        <div class="flex gap-2">
+                            <button @click="payer = 'me'"
+                                class="flex-1 py-2.5 rounded-xl text-sm font-medium shadow-sm transition-all"
+                                :class="payer === 'me' ? 'bg-amber-500 text-white' : 'bg-white text-amber-700 border border-amber-200'">
+                                <i class="ri-user-line mr-1"></i>我先墊
+                            </button>
+                            <button @click="payer = 'public'"
+                                class="flex-1 py-2.5 rounded-xl text-sm font-medium shadow-sm transition-all"
+                                :class="payer === 'public' ? 'bg-amber-500 text-white' : 'bg-white text-amber-700 border border-amber-200'">
+                                <i class="ri-wallet-3-line mr-1"></i>公家錢包
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 共享模式：誰有份？ -->
+                    <div v-if="mode === 'shared'" class="bg-amber-100 rounded-xl p-3 mb-4 border border-amber-200">
+                        <div class="flex justify-between items-center mb-2">
+                            <p class="text-sm text-amber-700 font-medium">👥 誰有份？（平分）</p>
+                            <button @click="toggleAllBeneficiaries"
+                                class="text-xs px-2 py-1 rounded-lg bg-amber-200 text-amber-700">
+                                {{ allSelected ? '取消全選' : '全選' }}
+                            </button>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <button v-for="member in familyMembers" :key="member.id"
+                                @click="toggleBeneficiary(member.id)"
+                                class="px-3 py-2 rounded-xl text-sm font-medium transition-all shadow-sm"
+                                :class="selectedBeneficiaries.includes(member.id) ? 'bg-amber-500 text-white' : 'bg-white text-amber-700 border border-amber-200'">
+                                <i class="ri-user-line mr-1"></i>{{ member.name }}
+                                <span v-if="member.id === currentUser.id" class="text-xs ml-1">(我)</span>
+                            </button>
+                        </div>
+                        <p v-if="selectedBeneficiaries.length > 0" class="text-sm text-amber-600 mt-2 font-medium">
+                            💡 每人分擔: ${{ splitAmount.toFixed(0) }}
+                        </p>
+                    </div>
+
+                    <!-- 類別選擇 -->
+                    <div class="grid grid-cols-5 gap-2 mb-4">
+                        <button v-for="cat in filteredCategories" :key="cat.id" @click="selectedCategory = cat"
+                            class="flex flex-col items-center p-2 rounded-xl transition-all"
+                            :class="selectedCategory?.id === cat.id ? (mode === 'personal' ? 'bg-blue-500 text-white shadow-md' : 'bg-amber-500 text-white shadow-md') : 'bg-white text-slate-600 border border-slate-200'">
+                            <i :class="cat.icon" class="text-2xl"></i>
+                            <span class="text-xs mt-1 truncate w-full text-center">{{ cat.name }}</span>
+                        </button>
+                    </div>
+
+                    <!-- 金額顯示 -->
+                    <div class="bg-white rounded-xl p-4 mb-4 shadow-sm border border-slate-200">
+                        <div class="flex justify-between items-start">
+                            <div class="flex-1">
+                                <span class="text-slate-500 text-sm">{{ selectedCategory?.name || '請選擇類別' }}</span>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-3xl font-bold"
+                                    :class="transactionType === 'expense' ? 'text-red-500' : 'text-green-500'">
+                                    {{ transactionType === 'expense' ? '-' : '+' }}${{ calcDisplay || '0' }}
+                                </div>
+                            </div>
+                        </div>
+                        <input v-model="transactionNote" type="text" placeholder="備註（選填）"
+                            class="w-full mt-3 px-3 py-2 bg-slate-100 rounded-lg text-sm border border-slate-200 text-slate-700">
+                    </div>
+
+                    <!-- 日期選擇器（計算機上方） -->
+                    <button @click="showDatePicker = true"
+                        class="w-full flex items-center justify-between px-4 py-3 mb-3 rounded-xl border-2 transition-all"
+                        :class="mode === 'personal' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-amber-50 border-amber-200 text-amber-700'">
+                        <div class="flex items-center gap-2">
+                            <i class="ri-calendar-event-line text-lg"></i>
+                            <span class="font-medium">{{ formatDisplayDate(selectedDate) }}</span>
+                        </div>
+                        <i class="ri-arrow-right-s-line text-lg"></i>
+                    </button>
+
+                    <!-- 計算機 -->
+                    <div class="grid grid-cols-4 gap-2">
+                        <button v-for="key in calcKeys" :key="key" @click="handleCalcKey(key)"
+                            class="calc-btn py-4 rounded-2xl font-bold text-xl transition-all active:scale-95"
+                            :class="getCalcKeyClass(key)">
+                            <template v-if="key === 'backspace'"><i class="ri-delete-back-2-line"></i></template>
+                            <template v-else-if="key === 'confirm'"><i class="ri-check-line text-2xl"></i></template>
+                            <template v-else>{{ key }}</template>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Tab 2: 歷史 -->
+                <div v-else-if="activeTab === 'history'" class="p-4">
+                    <!-- 月份選擇器 -->
+                    <div class="flex items-center justify-between mb-4">
+                        <button @click="changeMonth(-1)"
+                            class="w-10 h-10 rounded-full bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50">
+                            <i class="ri-arrow-left-s-line text-xl"></i>
+                        </button>
+                        <div class="text-center">
+                            <h2 class="text-xl font-bold"
+                                :class="mode === 'personal' ? 'text-blue-600' : 'text-amber-600'">
+                                {{ selectedMonth.replace('-', '年') + '月' }}
+                            </h2>
+                            <p class="text-xs text-slate-400">{{ mode === 'personal' ? '個人帳本' : '共享帳本' }}</p>
+                        </div>
+                        <button @click="changeMonth(1)"
+                            class="w-10 h-10 rounded-full bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50">
+                            <i class="ri-arrow-right-s-line text-xl"></i>
+                        </button>
+                    </div>
+
+                    <!-- 月統計卡片 -->
+                    <div class="grid grid-cols-2 gap-3 mb-4">
+                        <div class="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
+                            <p class="text-xs text-slate-400 mb-1">月支出</p>
+                            <p class="text-2xl font-bold text-red-500">-${{ monthStats.expense }}</p>
+                        </div>
+                        <div class="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
+                            <p class="text-xs text-slate-400 mb-1">月收入</p>
+                            <p class="text-2xl font-bold text-green-500">+${{ monthStats.income }}</p>
+                        </div>
+                    </div>
+
+                    <!-- 月結餘圓環 -->
+                    <div class="bg-white rounded-xl p-4 mb-4 shadow-sm border border-slate-200 text-center">
+                        <div class="text-sm text-slate-400 mb-1">月結餘</div>
+                        <div class="text-3xl font-bold"
+                            :class="monthStats.net >= 0 ? 'text-green-500' : 'text-red-500'">
+                            ${{ monthStats.net }}
+                        </div>
+                    </div>
+
+                    <!-- 搜尋 -->
+                    <input v-model="searchQuery" type="text" placeholder="🔍 搜尋交易記錄..."
+                        class="w-full px-4 py-3 bg-white rounded-xl mb-4 border border-slate-200 text-slate-700 shadow-sm">
+
+                    <!-- 交易列表 -->
+                    <div v-for="(group, date) in groupedTransactions" :key="date"
+                        class="mb-4 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                        <div class="flex justify-between items-center px-4 py-3 bg-slate-50 border-b border-slate-100">
+                            <h3 class="text-sm text-slate-600 font-medium">{{ date }}</h3>
+                            <span class="text-sm font-bold"
+                                :class="getDayTotal(group) >= 0 ? 'text-green-500' : 'text-red-500'">${{
+                                getDayTotal(group) }}</span>
+                        </div>
+                        <div>
+                            <div v-for="tx in group" :key="tx.id"
+                                class="flex items-center gap-3 px-4 py-3 border-b border-slate-50 last:border-0">
+                                <div class="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
+                                    :class="tx.type === 'expense' ? 'bg-red-100 text-red-500' : 'bg-green-100 text-green-500'">
+                                    <i :class="getCategoryIcon(tx.category_id)"></i>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-2">
+                                        <span class="font-medium text-slate-800 truncate">{{ tx.note ||
+                                            getCategoryName(tx.category_id) }}</span>
+                                        <span v-if="tx.is_advance && !tx.is_settled"
+                                            class="text-xs px-2 py-0.5 rounded-full bg-orange-100 text-orange-600 font-medium flex-shrink-0">待結清</span>
+                                    </div>
+                                    <p v-if="mode === 'shared' && tx.payer_name" class="text-xs text-slate-400">{{
+                                        tx.payer_name }} 付款</p>
+                                </div>
+                                <div class="text-right flex-shrink-0">
+                                    <span class="font-bold text-lg"
+                                        :class="tx.type === 'expense' ? 'text-red-500' : 'text-green-500'">
+                                        {{ tx.type === 'expense' ? '-' : '' }}${{ tx.amount }}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <p v-if="Object.keys(groupedTransactions).length === 0" class="text-center text-slate-400 py-8">
+                        <i class="ri-inbox-line text-4xl block mb-2"></i>
+                        {{ mode === 'personal' ? '本月尚無個人交易' : '本月尚無共享交易' }}
+                    </p>
+                </div>
+
+                <!-- Tab 3: 統計/結清 -->
+                <div v-else-if="activeTab === 'stats'" class="p-4">
+                    <!-- 個人模式統計 -->
+                    <template v-if="mode === 'personal'">
+                        <div class="grid grid-cols-3 gap-3 mb-4">
+                            <div class="bg-green-100 rounded-xl p-3 text-center shadow-sm border border-green-200">
+                                <p class="text-xs text-green-600 font-medium">收入</p>
+                                <p class="text-lg font-bold text-green-600">${{ stats.income }}</p>
+                            </div>
+                            <div class="bg-red-100 rounded-xl p-3 text-center shadow-sm border border-red-200">
+                                <p class="text-xs text-red-600 font-medium">支出</p>
+                                <p class="text-lg font-bold text-red-600">${{ stats.expense }}</p>
+                            </div>
+                            <div class="bg-blue-100 rounded-xl p-3 text-center shadow-sm border border-blue-200">
+                                <p class="text-xs text-blue-600 font-medium">淨額</p>
+                                <p class="text-lg font-bold"
+                                    :class="stats.net >= 0 ? 'text-green-600' : 'text-red-600'">${{ stats.net }}</p>
+                            </div>
+                        </div>
+                        <div class="bg-white rounded-xl p-4 mb-4 shadow-sm border border-slate-200">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="text-slate-700 font-medium">預算進度</span>
+                                <span :class="budgetPercent > 90 ? 'text-red-500 font-bold' : 'text-slate-600'">{{
+                                    budgetPercent
+                                    }}%</span>
+                            </div>
+                            <div class="h-3 bg-slate-200 rounded-full overflow-hidden">
+                                <div class="h-full transition-all"
+                                    :style="{ width: Math.min(budgetPercent, 100) + '%' }"
+                                    :class="budgetPercent > 90 ? 'bg-red-500' : 'bg-green-500'"></div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- 共享模式統計 -->
+                    <template v-else>
+                        <!-- 公家錢包 -->
+                        <div
+                            class="bg-gradient-to-r from-amber-100 to-orange-100 rounded-xl p-4 mb-4 text-center shadow-sm border border-amber-200">
+                            <p class="text-sm text-amber-700 mb-1"><i class="ri-wallet-3-line mr-1"></i>公家錢包餘額</p>
+                            <p class="text-3xl font-bold text-amber-600">${{ publicWallet }}</p>
+                        </div>
+
+                        <!-- 債務清單 -->
+                        <div class="bg-white rounded-xl p-4 mb-4 shadow-sm border border-slate-200">
+                            <h3 class="font-bold mb-3 text-slate-800"><i
+                                    class="ri-radar-line mr-2 text-amber-500"></i>債務雷達（誰欠誰）
+                            </h3>
+                            <div v-if="debtList.length > 0" class="space-y-3">
+                                <div v-for="debt in debtList" :key="`${debt.debtorId}-${debt.creditorId}`"
+                                    class="flex justify-between items-center py-3 px-3 bg-slate-50 rounded-xl border border-slate-100">
+                                    <div>
+                                        <span class="font-medium">
+                                            <span class="text-red-500">{{ debt.debtorName }}</span>
+                                            <span class="text-slate-400 mx-1">欠</span>
+                                            <span class="text-green-500">{{ debt.creditorName }}</span>
+                                        </span>
+                                        <p class="text-xs text-slate-400">{{ debt.count }} 筆待結清</p>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <span class="font-bold text-amber-500 text-lg">${{ Math.round(debt.amount)
+                                            }}</span>
+                                        <button @click="settlePersonalDebt(debt)"
+                                            class="px-3 py-1.5 bg-gradient-to-r from-amber-400 to-orange-400 rounded-lg text-sm text-white font-medium shadow-md">結清</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <p v-else class="text-slate-400 text-center py-4">🎉 無待結清款項</p>
+                        </div>
+
+                        <!-- 入錢按鈕 -->
+                        <button @click="showTopUp = true"
+                            class="w-full py-3 bg-gradient-to-r from-amber-400 to-orange-500 text-white rounded-xl font-medium mb-4 shadow-lg">
+                            <i class="ri-add-circle-line mr-2"></i>入錢到公家錢包
+                        </button>
+                    </template>
+
+                    <!-- 圓餅圖 -->
+                    <div class="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
+                        <h3 class="font-bold mb-3 text-slate-800">📊 支出分布</h3>
+                        <canvas id="expenseChart" height="200"></canvas>
+                    </div>
+                </div>
+
+                <!-- Tab 4: 週期（固定支出） -->
+                <div v-else-if="activeTab === 'recurring'" class="p-4">
+                    <div class="flex justify-between items-center mb-4">
+                        <div>
+                            <h2 class="text-lg font-bold text-slate-800">
+                                {{ mode === 'personal' ? '💰 個人固定支出' : '👥 共享固定支出' }}
+                            </h2>
+                            <p class="text-xs text-slate-500">每月自動提醒的定期帳單</p>
+                        </div>
+                        <button @click="showAddRecurring = true"
+                            class="px-3 py-1.5 rounded-xl text-sm text-white shadow-sm"
+                            :class="mode === 'personal' ? 'bg-blue-500' : 'bg-amber-500'">
+                            <i class="ri-add-line mr-1"></i>新增
+                        </button>
+                    </div>
+
+                    <!-- 說明卡片 -->
+                    <div v-if="filteredRecurring.length === 0" class="rounded-xl p-4 mb-4 border"
+                        :class="mode === 'personal' ? 'bg-blue-50 border-blue-100' : 'bg-amber-50 border-amber-100'">
+                        <p class="text-sm" :class="mode === 'personal' ? 'text-blue-700' : 'text-amber-700'">
+                            <i class="ri-lightbulb-line mr-1"></i>
+                            <strong>什麼是固定支出？</strong><br>
+                            每月固定要付的帳單，例如：房租、水電、網路費等。<br>
+                            新增後，系統會在到期日提醒您記帳。
+                        </p>
+                    </div>
+
+                    <div class="space-y-3">
+                        <div v-for="item in filteredRecurring" :key="item.id"
+                            class="bg-white rounded-xl p-4 flex items-center gap-3 shadow-sm border border-slate-200">
+                            <div class="w-12 h-12 rounded-xl flex items-center justify-center relative"
+                                :class="item.mode === 'personal' ? 'bg-blue-100 text-blue-500' : 'bg-amber-100 text-amber-500'">
+                                <i class="ri-calendar-check-line text-xl"></i>
+                                <span
+                                    class="absolute -top-1 -right-1 w-5 h-5 rounded-full text-xs flex items-center justify-center text-white font-bold"
+                                    :class="item.mode === 'personal' ? 'bg-blue-500' : 'bg-amber-500'">
+                                    {{ item.cron_day }}
+                                </span>
+                            </div>
+                            <div class="flex-1">
+                                <div class="flex items-center gap-2">
+                                    <p class="font-medium text-slate-800">{{ item.name }}</p>
+                                    <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                                        :class="item.mode === 'personal' ? 'bg-blue-100 text-blue-600' : 'bg-amber-100 text-amber-600'">
+                                        {{ item.mode === 'personal' ? '個人' : '共享' }}
+                                    </span>
+                                </div>
+                                <p class="text-sm text-slate-500">📅 每月 {{ item.cron_day }} 日扣款</p>
+                            </div>
+                            <div class="text-right">
+                                <span class="font-bold text-red-500 text-lg block">-${{ item.amount }}</span>
+                                <button @click="deleteRecurring(item)"
+                                    class="text-xs text-slate-400 hover:text-red-500">刪除</button>
+                            </div>
+                        </div>
+                    </div>
+                    <p v-if="filteredRecurring.length === 0" class="text-center text-slate-400 py-8">
+                        <i class="ri-calendar-line text-4xl block mb-2"></i>
+                        {{ mode === 'personal' ? '尚無個人固定支出' : '尚無共享固定支出' }}
+                    </p>
+                    <button @click="checkRecurring" class="w-full mt-4 py-3 rounded-xl font-medium text-white shadow-md"
+                        :class="mode === 'personal' ? 'bg-blue-500' : 'bg-amber-500'">
+                        <i class="ri-refresh-line mr-2"></i>檢查到期項目
+                    </button>
+                </div>
+
+                <!-- Tab 5: 設定 -->
+                <div v-else-if="activeTab === 'settings'" class="p-4">
+                    <div class="bg-white rounded-xl p-4 mb-4 shadow-sm border border-slate-200">
+                        <h3 class="font-medium mb-3 text-slate-800"><i class="ri-home-line mr-2 text-amber-500"></i>家庭資訊
+                        </h3>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between py-2 border-b border-slate-100"><span
+                                    class="text-slate-500">Room ID</span><span
+                                    class="font-mono bg-slate-100 px-2 py-1 rounded text-slate-700">{{ familyId
+                                    }}</span></div>
+                            <div class="flex justify-between py-2 border-b border-slate-100"><span
+                                    class="text-slate-500">家庭名稱</span><span class="text-slate-800">{{ familyName
+                                    }}</span></div>
+                            <div class="flex justify-between py-2"><span class="text-slate-500">資料庫</span><span
+                                    :class="dbReady ? 'text-green-600' : 'text-red-500'">{{ dbReady ? '已連線' : '離線'
+                                    }}</span></div>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-xl p-4 mb-4 shadow-sm border border-slate-200">
+                        <h3 class="font-medium mb-3 text-slate-800"><i class="ri-user-line mr-2 text-blue-500"></i>我的暱稱
+                        </h3>
+                        <input v-model="currentUser.name" @blur="saveUserToDb"
+                            class="w-full px-3 py-2 bg-slate-100 rounded-lg border border-slate-200 text-slate-800">
+                    </div>
+                    <div class="bg-white rounded-xl p-4 mb-4 shadow-sm border border-slate-200">
+                        <h3 class="font-medium mb-3 text-slate-800"><i
+                                class="ri-money-dollar-circle-line mr-2 text-blue-500"></i>月預算</h3>
+                        <input v-model.number="budget" @blur="saveFamilyToDb" type="number"
+                            class="w-full px-3 py-2 bg-slate-100 rounded-lg border border-slate-200 text-slate-800">
+                    </div>
+                    <button @click="exportCSV"
+                        class="w-full py-3 bg-white border border-slate-200 text-slate-700 rounded-xl font-medium mb-3 shadow-sm">
+                        <i class="ri-download-line mr-2"></i>匯出 CSV
+                    </button>
+                    <button @click="logout" class="w-full py-3 bg-red-500 text-white rounded-xl font-medium shadow-md">
+                        <i class="ri-logout-box-line mr-2"></i>登出
+                    </button>
+                </div>
+            </main>
+
+            <!-- 底部導航 -->
+            <nav v-if="isLoggedIn"
+                class="fixed bottom-0 left-0 right-0 border-t safe-bottom max-w-lg mx-auto transition-colors duration-300 shadow-lg"
+                :class="mode === 'personal' ? 'bg-white border-slate-200' : 'bg-amber-50 border-amber-200'">
+                <div class="flex justify-around py-2">
+                    <button v-for="tab in tabs" :key="tab.id"
+                        @click="activeTab = tab.id; if(tab.id === 'stats') renderChart()"
+                        class="flex flex-col items-center px-4 py-1"
+                        :class="activeTab === tab.id ? (mode === 'personal' ? 'text-blue-500' : 'text-amber-600') : 'text-slate-400'">
+                        <i :class="tab.icon" class="text-xl"></i>
+                        <span class="text-xs mt-1">{{ tab.name }}</span>
+                    </button>
+                </div>
+            </nav>
+        </div>
+
+        <!-- 建立家庭彈窗 -->
+        <div v-if="showCreateFamily" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+            @click.self="showCreateFamily = false">
+            <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl">
+                <h3 class="text-xl font-bold mb-4 text-slate-800">建立新家庭</h3>
+                <label class="block text-sm text-slate-600 mb-1">家庭名稱</label>
+                <input v-model="newFamilyName" type="text" placeholder="例如：快樂家庭"
+                    class="w-full px-4 py-3 bg-slate-100 rounded-xl mb-3 border border-slate-200 text-slate-800">
+                <label class="block text-sm text-slate-600 mb-1">PIN 碼</label>
+                <input v-model="newFamilyPin" type="password" placeholder="4-6位數字密碼" maxlength="6"
+                    class="w-full px-4 py-3 bg-slate-100 rounded-xl mb-3 border border-slate-200 text-slate-800">
+                <label class="block text-sm text-slate-600 mb-1">您的暱稱</label>
+                <input v-model="newUserName" type="text" placeholder="其他人看到的名字"
+                    class="w-full px-4 py-3 bg-slate-100 rounded-xl mb-4 border border-slate-200 text-slate-800">
+                <div class="flex gap-3">
+                    <button @click="showCreateFamily = false"
+                        class="flex-1 py-3 bg-slate-200 text-slate-700 rounded-xl font-medium">取消</button>
+                    <button @click="createFamily" :disabled="creatingFamily"
+                        class="flex-1 py-3 bg-blue-500 text-white rounded-xl font-medium shadow-md">{{ creatingFamily ?
+                        '建立中...' : '建立' }}</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 加入家庭彈窗 -->
+        <div v-if="showJoinFamily" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+            @click.self="showJoinFamily = false">
+            <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl">
+                <h3 class="text-xl font-bold mb-4 text-slate-800">加入家庭</h3>
+                <label class="block text-sm text-slate-600 mb-1">Room ID</label>
+                <input v-model="joinRoomId" type="text" placeholder="向家人索取 Room ID"
+                    class="w-full px-4 py-3 bg-slate-100 rounded-xl mb-3 border border-slate-200 text-slate-800">
+                <label class="block text-sm text-slate-600 mb-1">PIN 碼</label>
+                <input v-model="joinPin" type="password" placeholder="向家人索取" maxlength="6"
+                    class="w-full px-4 py-3 bg-slate-100 rounded-xl mb-3 border border-slate-200 text-slate-800">
+                <label class="block text-sm text-slate-600 mb-1">您的暱稱</label>
+                <input v-model="newUserName" type="text" placeholder="其他人看到的名字"
+                    class="w-full px-4 py-3 bg-slate-100 rounded-xl mb-4 border border-slate-200 text-slate-800">
+                <div class="flex gap-3">
+                    <button @click="showJoinFamily = false"
+                        class="flex-1 py-3 bg-slate-200 text-slate-700 rounded-xl font-medium">取消</button>
+                    <button @click="joinFamily" :disabled="joiningFamily"
+                        class="flex-1 py-3 bg-blue-500 text-white rounded-xl font-medium shadow-md">{{ joiningFamily ?
+                        '加入中...' : '加入' }}</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 入錢彈窗 (情況D) -->
+        <div v-if="showTopUp" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+            @click.self="showTopUp = false">
+            <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl">
+                <h3 class="text-xl font-bold mb-2 text-slate-800"><i
+                        class="ri-wallet-3-line mr-2 text-amber-500"></i>入錢到公家錢包</h3>
+                <p class="text-slate-500 text-sm mb-4">增加公家錢包餘額</p>
+                <label class="block text-sm text-slate-600 mb-1">金額</label>
+                <input v-model.number="topUpAmount" type="number" placeholder="輸入金額"
+                    class="w-full px-4 py-3 bg-slate-100 rounded-xl mb-3 border border-slate-200 text-slate-800">
+                <label class="block text-sm text-slate-600 mb-1">備註（選填）</label>
+                <input v-model="topUpNote" type="text" placeholder="例如：12月份大家交錢"
+                    class="w-full px-4 py-3 bg-slate-100 rounded-xl mb-4 border border-slate-200 text-slate-800">
+                <div class="flex gap-3">
+                    <button @click="showTopUp = false"
+                        class="flex-1 py-3 bg-slate-200 text-slate-700 rounded-xl font-medium">取消</button>
+                    <button @click="topUpWallet"
+                        class="flex-1 py-3 bg-amber-500 text-white rounded-xl font-medium shadow-md">確認入錢</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 新增週期性支出彈窗 -->
+        <div v-if="showAddRecurring" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+            @click.self="showAddRecurring = false">
+            <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl max-h-[90vh] overflow-y-auto">
+                <h3 class="text-xl font-bold mb-2 text-slate-800">📅 新增固定支出</h3>
+                <p class="text-sm text-slate-500 mb-4">設定每月固定要付的帳單</p>
+
+                <!-- 類型選擇 -->
+                <label class="block text-sm text-slate-600 mb-2 font-medium">類型</label>
+                <div class="flex gap-2 mb-4">
+                    <button @click="newRecurring.mode = 'personal'"
+                        class="flex-1 py-2.5 rounded-xl text-sm font-medium transition-all"
+                        :class="newRecurring.mode === 'personal' ? 'bg-blue-500 text-white shadow-md' : 'bg-slate-100 text-slate-600 border border-slate-200'">
+                        <i class="ri-user-line mr-1"></i>個人
+                    </button>
+                    <button @click="newRecurring.mode = 'shared'"
+                        class="flex-1 py-2.5 rounded-xl text-sm font-medium transition-all"
+                        :class="newRecurring.mode === 'shared' ? 'bg-amber-500 text-white shadow-md' : 'bg-slate-100 text-slate-600 border border-slate-200'">
+                        <i class="ri-group-line mr-1"></i>共享
+                    </button>
+                </div>
+
+                <label class="block text-sm text-slate-600 mb-1 font-medium">支出名稱</label>
+                <input v-model="newRecurring.name" type="text" placeholder="例如：房租、網路費"
+                    class="w-full px-4 py-3 bg-slate-100 rounded-xl mb-3 border border-slate-200 text-slate-800">
+
+                <label class="block text-sm text-slate-600 mb-1 font-medium">金額</label>
+                <input v-model.number="newRecurring.amount" type="number" placeholder="每月金額"
+                    class="w-full px-4 py-3 bg-slate-100 rounded-xl mb-3 border border-slate-200 text-slate-800">
+
+                <label class="block text-sm text-slate-600 mb-2 font-medium">📆 每月扣款日期（點選日期）</label>
+                <div class="grid grid-cols-7 gap-1 mb-4 p-2 bg-slate-50 rounded-xl border border-slate-200">
+                    <button v-for="day in 31" :key="day" @click="newRecurring.cron_day = day"
+                        class="w-9 h-9 rounded-lg text-sm font-medium transition-all" :class="newRecurring.cron_day === day 
+                            ? (newRecurring.mode === 'personal' ? 'bg-blue-500 text-white shadow-md' : 'bg-amber-500 text-white shadow-md')
+                            : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'">
+                        {{ day }}
+                    </button>
+                </div>
+                <p class="text-xs text-slate-500 mb-4 text-center">
+                    已選擇：<span class="font-bold"
+                        :class="newRecurring.mode === 'personal' ? 'text-blue-600' : 'text-amber-600'">每月 {{
+                        newRecurring.cron_day }} 日</span>
+                </p>
+
+                <div class="flex gap-3">
+                    <button @click="showAddRecurring = false"
+                        class="flex-1 py-3 bg-slate-200 text-slate-700 rounded-xl font-medium">取消</button>
+                    <button @click="addRecurring" class="flex-1 py-3 text-white rounded-xl font-medium shadow-md"
+                        :class="newRecurring.mode === 'personal' ? 'bg-blue-500' : 'bg-amber-500'">新增</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 日期選擇器彈窗 -->
+        <div v-if="showDatePicker" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+            @click.self="showDatePicker = false">
+            <div class="bg-white rounded-2xl p-5 w-full max-w-sm shadow-xl">
+                <!-- 月份切換 -->
+                <div class="flex items-center justify-between mb-4">
+                    <button @click="changePickerMonth(-1)"
+                        class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200">
+                        <i class="ri-arrow-left-s-line text-xl"></i>
+                    </button>
+                    <h3 class="text-lg font-bold text-slate-800">{{ pickerYear }}年{{ pickerMonth }}月</h3>
+                    <button @click="changePickerMonth(1)"
+                        class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200">
+                        <i class="ri-arrow-right-s-line text-xl"></i>
+                    </button>
+                </div>
+
+                <!-- 星期標題 -->
+                <div class="grid grid-cols-7 gap-1 mb-2">
+                    <div v-for="d in ['日','一','二','三','四','五','六']" :key="d"
+                        class="text-center text-xs text-slate-400 py-1">{{ d }}</div>
+                </div>
+
+                <!-- 日曆網格 -->
+                <div class="grid grid-cols-7 gap-1 mb-4">
+                    <button v-for="day in calendarDays" :key="day.date" @click="day.date && selectDate(day.date)"
+                        class="aspect-square rounded-lg text-sm font-medium transition-all flex items-center justify-center"
+                        :class="getDateClass(day)" :disabled="!day.date">
+                        {{ day.day }}
+                    </button>
+                </div>
+
+                <!-- 快速選擇 -->
+                <div class="flex gap-2 mb-4">
+                    <button @click="selectDate(new Date().toISOString().split('T')[0])"
+                        class="flex-1 py-2.5 rounded-xl text-sm font-medium transition-all"
+                        :class="selectedDate === new Date().toISOString().split('T')[0] ? 'bg-blue-500 text-white' : 'bg-blue-50 text-blue-600'">
+                        <i class="ri-sun-line mr-1"></i>今天
+                    </button>
+                    <button @click="selectDate(new Date(Date.now() - 86400000).toISOString().split('T')[0])"
+                        class="flex-1 py-2.5 rounded-xl text-sm font-medium transition-all"
+                        :class="selectedDate === new Date(Date.now() - 86400000).toISOString().split('T')[0] ? 'bg-slate-600 text-white' : 'bg-slate-100 text-slate-600'">
+                        <i class="ri-history-line mr-1"></i>昨天
+                    </button>
+                </div>
+
+                <!-- 確定按鈕 -->
+                <button @click="showDatePicker = false" class="w-full py-3 rounded-xl font-medium text-white shadow-md"
+                    :class="mode === 'personal' ? 'bg-blue-500' : 'bg-amber-500'">
+                    確定（{{ formatDisplayDate(selectedDate) }}）
+                </button>
+            </div>
+        </div>
+
+        <!-- Toast -->
+        <Transition enter-active-class="transition ease-out duration-300" enter-from-class="opacity-0 translate-y-4"
+            enter-to-class="opacity-100" leave-active-class="transition ease-in duration-200"
+            leave-from-class="opacity-100" leave-to-class="opacity-0 translate-y-4">
+            <div v-if="toast.show"
+                class="fixed bottom-24 left-4 right-4 max-w-lg mx-auto bg-white rounded-xl p-4 flex items-center gap-3 z-50 shadow-lg border border-slate-200">
+                <i :class="[toast.icon, toast.type === 'success' ? 'text-green-500' : 'text-red-500']"
+                    class="text-xl"></i>
+                <span class="text-slate-700">{{ toast.message }}</span>
+            </div>
+        </Transition>
+    </div>
+
+    <script type="module">
+        const { createApp, ref, reactive, computed, onMounted, watch, nextTick } = Vue;
+        const { createClient } = supabase;
+
+        createApp({
+            setup() {
+                const SUPABASE_URL = 'https://xjgspinjtgxxarocpzca.supabase.co';
+                const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhqZ3NwaW5qdGd4eGFyb2NwemNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUxNTM5NDksImV4cCI6MjA4MDcyOTk0OX0.0mN6xwHRSI1SBFp_pp5CqYIPx6uAqx-ST_C2uLVG5Lo';
+
+                let db = null, channel = null;
+                const dbReady = ref(false), syncing = ref(false), loading = ref(true), loadingMessage = ref('初始化中...');
+                const isLoggedIn = ref(false), mode = ref('personal'), activeTab = ref('input');
+                const transactionType = ref('expense'), selectedCategory = ref(null), calcDisplay = ref(''), transactionNote = ref('');
+                const searchQuery = ref(''), budget = ref(10000), payer = ref('me');
+                const publicWallet = ref(0);
+
+                // 日期選擇器
+                const selectedDate = ref(new Date().toISOString().split('T')[0]); // 交易日期 YYYY-MM-DD
+                const showDatePicker = ref(false);
+                const selectedMonth = ref(new Date().toISOString().slice(0, 7)); // 歷史頁面月份 YYYY-MM
+
+                const showCreateFamily = ref(false), showJoinFamily = ref(false), showAddRecurring = ref(false), showTopUp = ref(false);
+                const creatingFamily = ref(false), joiningFamily = ref(false);
+                const newFamilyName = ref(''), newFamilyPin = ref(''), newUserName = ref(''), joinRoomId = ref(''), joinPin = ref('');
+                const newRecurring = reactive({ name: '', amount: 0, cron_day: 1, mode: 'personal' });
+                const topUpAmount = ref(0), topUpNote = ref('');
+
+                const familyId = ref(''), familyName = ref('');
+                const currentUser = reactive({ id: '', name: '' });
+                const transactions = ref([]), categories = ref([]), recurringItems = ref([]);
+                const familyMembers = ref([]);  // 家庭成員列表
+                const selectedBeneficiaries = ref([]);  // 選中的分帳對象
+                const toast = reactive({ show: false, message: '', type: 'success', icon: 'ri-check-line' });
+
+                const tabs = [
+                    { id: 'input', name: '輸入', icon: 'ri-calculator-line' },
+                    { id: 'history', name: '歷史', icon: 'ri-history-line' },
+                    { id: 'stats', name: '統計', icon: 'ri-pie-chart-line' },
+                    { id: 'recurring', name: '週期', icon: 'ri-calendar-line' },
+                    { id: 'settings', name: '設定', icon: 'ri-settings-3-line' }
+                ];
+
+                const calcKeys = ['7', '8', '9', 'backspace', '4', '5', '6', '+', '1', '2', '3', '-', '.', '0', '00', 'confirm'];
+
+                const defaultCategories = [
+                    { id: 'food', name: '餐飲', icon: 'ri-restaurant-line', type: 'expense' },
+                    { id: 'transport', name: '交通', icon: 'ri-car-line', type: 'expense' },
+                    { id: 'shopping', name: '購物', icon: 'ri-shopping-bag-line', type: 'expense' },
+                    { id: 'entertainment', name: '娛樂', icon: 'ri-gamepad-line', type: 'expense' },
+                    { id: 'health', name: '醫療', icon: 'ri-heart-pulse-line', type: 'expense' },
+                    { id: 'home', name: '居家', icon: 'ri-home-4-line', type: 'expense' },
+                    { id: 'utility', name: '水電', icon: 'ri-flashlight-line', type: 'expense' },
+                    { id: 'rent', name: '房租', icon: 'ri-building-line', type: 'expense' },
+                    { id: 'other', name: '其他', icon: 'ri-more-line', type: 'expense' },
+                    { id: 'salary', name: '薪資', icon: 'ri-money-dollar-circle-line', type: 'income' },
+                    { id: 'bonus', name: '獎金', icon: 'ri-gift-line', type: 'income' },
+                    { id: 'topup', name: '入錢', icon: 'ri-wallet-3-line', type: 'income' }
+                ];
+
+                const filteredCategories = computed(() => categories.value.filter(c => c.type === transactionType.value));
+                const filteredRecurring = computed(() => recurringItems.value.filter(item => item.mode === mode.value));
+
+                // 日期選擇器月曆
+                const pickerDate = ref(new Date());
+                const pickerYear = computed(() => pickerDate.value.getFullYear());
+                const pickerMonth = computed(() => pickerDate.value.getMonth() + 1);
+
+                const calendarDays = computed(() => {
+                    const year = pickerDate.value.getFullYear();
+                    const month = pickerDate.value.getMonth();
+                    const firstDay = new Date(year, month, 1).getDay();
+                    const daysInMonth = new Date(year, month + 1, 0).getDate();
+                    const days = [];
+
+                    // 填充前面的空白
+                    for (let i = 0; i < firstDay; i++) {
+                        days.push({ day: '', date: null });
+                    }
+                    // 填充日期
+                    for (let i = 1; i <= daysInMonth; i++) {
+                        const date = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+                        days.push({ day: i, date });
+                    }
+                    return days;
+                });
+
+                const changePickerMonth = (delta) => {
+                    const newDate = new Date(pickerDate.value);
+                    newDate.setMonth(newDate.getMonth() + delta);
+                    pickerDate.value = newDate;
+                };
+
+                const selectDate = (date) => {
+                    selectedDate.value = date;
+                };
+
+                const getDateClass = (day) => {
+                    if (!day.date) return 'bg-transparent';
+                    const today = new Date().toISOString().split('T')[0];
+                    const isSelected = day.date === selectedDate.value;
+                    const isToday = day.date === today;
+
+                    if (isSelected) {
+                        return mode.value === 'personal'
+                            ? 'bg-blue-500 text-white shadow-md'
+                            : 'bg-amber-500 text-white shadow-md';
+                    }
+                    if (isToday) return 'bg-slate-200 text-slate-800 font-bold';
+                    return 'bg-slate-50 text-slate-700 hover:bg-slate-100';
+                };
+
+                const groupedTransactions = computed(() => {
+                    let filtered = transactions.value.filter(tx => {
+                        // 個人模式：只顯示自己記的個人交易
+                        if (mode.value === 'personal') {
+                            return tx.mode === 'personal' && tx.payer_id === currentUser.id;
+                        }
+                        // 共享模式：顯示所有共享交易
+                        if (mode.value === 'shared') {
+                            return tx.mode === 'shared';
+                        }
+                        return false;
+                    });
+                    // 搜尋過濾
+                    if (searchQuery.value) {
+                        filtered = filtered.filter(tx => {
+                            const cat = categories.value.find(c => c.id === tx.category_id);
+                            return cat?.name.includes(searchQuery.value) || tx.note?.includes(searchQuery.value);
+                        });
+                    }
+                    // 按日期排序並分組
+                    filtered = filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
+                    return filtered.reduce((groups, tx) => {
+                        const date = new Date(tx.date).toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' });
+                        if (!groups[date]) groups[date] = [];
+                        groups[date].push(tx);
+                        return groups;
+                    }, {});
+                });
+
+                const stats = computed(() => {
+                    // 個人模式：只統計自己的個人交易
+                    // 共享模式：統計所有共享交易
+                    const filtered = transactions.value.filter(tx => {
+                        if (mode.value === 'personal') {
+                            return tx.mode === 'personal' && tx.payer_id === currentUser.id;
+                        }
+                        return tx.mode === 'shared';
+                    });
+                    const income = filtered.filter(tx => tx.type === 'income').reduce((sum, tx) => sum + tx.amount, 0);
+                    const expense = filtered.filter(tx => tx.type === 'expense').reduce((sum, tx) => sum + tx.amount, 0);
+                    return { income, expense, net: income - expense };
+                });
+
+                const budgetPercent = computed(() => budget.value > 0 ? Math.round((stats.value.expense / budget.value) * 100) : 0);
+
+                // 日期格式化
+                const formatDisplayDate = (dateStr) => {
+                    if (!dateStr) return '今日';
+                    const date = new Date(dateStr);
+                    const today = new Date();
+                    const yesterday = new Date(Date.now() - 86400000);
+
+                    if (dateStr === today.toISOString().split('T')[0]) return '今日 ' + date.toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit', weekday: 'short' });
+                    if (dateStr === yesterday.toISOString().split('T')[0]) return '昨日 ' + date.toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit', weekday: 'short' });
+                    return date.toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' });
+                };
+
+                // 月份統計
+                const monthStats = computed(() => {
+                    const filtered = transactions.value.filter(tx => {
+                        const txMonth = tx.date?.slice(0, 7);
+                        if (txMonth !== selectedMonth.value) return false;
+                        if (mode.value === 'personal') {
+                            return tx.mode === 'personal' && tx.payer_id === currentUser.id;
+                        }
+                        return tx.mode === 'shared';
+                    });
+                    const income = filtered.filter(tx => tx.type === 'income').reduce((sum, tx) => sum + tx.amount, 0);
+                    const expense = filtered.filter(tx => tx.type === 'expense').reduce((sum, tx) => sum + tx.amount, 0);
+                    return { income, expense, net: income - expense };
+                });
+
+                const changeMonth = (delta) => {
+                    const [year, month] = selectedMonth.value.split('-').map(Number);
+                    const newDate = new Date(year, month - 1 + delta, 1);
+                    selectedMonth.value = newDate.toISOString().slice(0, 7);
+                };
+
+                // 分帳相關計算
+                const allSelected = computed(() => familyMembers.value.length > 0 && selectedBeneficiaries.value.length === familyMembers.value.length);
+                const splitAmount = computed(() => {
+                    const amount = parseFloat(calcDisplay.value) || 0;
+                    const count = selectedBeneficiaries.value.length;
+                    return count > 0 ? amount / count : 0;
+                });
+
+                const toggleBeneficiary = (memberId) => {
+                    const idx = selectedBeneficiaries.value.indexOf(memberId);
+                    if (idx > -1) {
+                        selectedBeneficiaries.value.splice(idx, 1);
+                    } else {
+                        selectedBeneficiaries.value.push(memberId);
+                    }
+                };
+
+                const toggleAllBeneficiaries = () => {
+                    if (allSelected.value) {
+                        selectedBeneficiaries.value = [];
+                    } else {
+                        selectedBeneficiaries.value = familyMembers.value.map(m => m.id);
+                    }
+                };
+
+                // 債務清單：計算誰欠誰多少錢 (個別債務)
+                const debtList = computed(() => {
+                    const debts = {};  // key: "debtor_id->creditor_id"
+
+                    transactions.value.filter(tx => tx.mode === 'shared' && tx.is_advance && !tx.is_settled && tx.beneficiary_ids?.length > 0).forEach(tx => {
+                        const payerId = tx.payer_id;
+                        const payerName = tx.payer_name || '成員';
+                        const beneficiaryIds = tx.beneficiary_ids;
+                        const splitAmt = tx.amount / beneficiaryIds.length;
+
+                        // 每個受益人欠付款人 splitAmt（付款人自己除外）
+                        beneficiaryIds.forEach(benId => {
+                            if (benId === payerId) return;  // 付款人自己的份不算欠款
+                            const key = `${benId}->${payerId}`;
+                            if (!debts[key]) {
+                                const benName = familyMembers.value.find(m => m.id === benId)?.name || '成員';
+                                debts[key] = {
+                                    debtorId: benId,
+                                    debtorName: benName,
+                                    creditorId: payerId,
+                                    creditorName: payerName,
+                                    amount: 0,
+                                    count: 0
+                                };
+                            }
+                            debts[key].amount += splitAmt;
+                            debts[key].count++;
+                        });
+                    });
+
+                    return Object.values(debts).filter(d => d.amount > 0.5);  // 過濾掉太小的金額
+                });
+
+                const getDayTotal = (group) => group.reduce((sum, tx) => sum + (tx.type === 'income' ? tx.amount : -tx.amount), 0);
+                const getCategoryIcon = (id) => categories.value.find(c => c.id === id)?.icon || 'ri-question-line';
+                const getCategoryName = (id) => categories.value.find(c => c.id === id)?.name || '未知';
+                const getMemberName = (id) => familyMembers.value.find(m => m.id === id)?.name || '成員';
+
+                const initSupabase = () => {
+                    try {
+                        db = createClient(SUPABASE_URL, SUPABASE_KEY);
+                        dbReady.value = true;
+                        console.log('✅ Supabase 連接成功');
+                        console.log('   URL:', SUPABASE_URL);
+                        // 測試連接
+                        db.from('families').select('count').then(res => {
+                            if (res.error) {
+                                console.error('❌ 資料表連接錯誤:', res.error.message);
+                                console.log('💡 請確保已在 Supabase 執行 supabase_setup.sql');
+                            } else {
+                                console.log('✅ 資料表連接正常');
+                            }
+                        });
+                        return true;
+                    } catch (e) {
+                        console.error('❌ Supabase 初始化失敗:', e);
+                        return false;
+                    }
+                };
+
+                const saveTransactionToDb = async (tx) => { if (db && familyId.value) await db.from('transactions').upsert(tx); };
+                const deleteTransactionFromDb = async (id) => { if (db) await db.from('transactions').delete().eq('id', id); };
+                const saveRecurringToDb = async (item) => { if (db) await db.from('recurring').upsert(item); };
+                const saveFamilyToDb = async () => {
+                    if (db && familyId.value) {
+                        await db.from('families').upsert({ id: familyId.value, name: familyName.value, budget: budget.value, public_wallet: publicWallet.value, updated_at: new Date().toISOString() });
+                        showToast('已儲存', 'success');
+                    }
+                };
+                const saveUserToDb = async () => {
+                    if (db && currentUser.id) {
+                        await db.from('users').upsert({ id: currentUser.id, name: currentUser.name, family_id: familyId.value, updated_at: new Date().toISOString() });
+                        saveToLocal();
+                        showToast('已儲存', 'success');
+                    }
+                };
+
+                const subscribeToData = () => {
+                    if (!db || !familyId.value) return;
+                    loadTransactions();
+                    loadRecurring();
+                    loadFamilyMembers();
+                    channel = db.channel('changes').on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `family_id=eq.${familyId.value}` }, () => loadTransactions()).subscribe();
+                };
+
+                const loadTransactions = async () => { const { data } = await db.from('transactions').select('*').eq('family_id', familyId.value).order('date', { ascending: false }); if (data) transactions.value = data; };
+                const loadRecurring = async () => { const { data } = await db.from('recurring').select('*').eq('family_id', familyId.value); if (data) recurringItems.value = data; };
+                const loadFamilyMembers = async () => {
+                    if (!db || !familyId.value) return;
+                    const { data } = await db.from('users').select('*').eq('family_id', familyId.value);
+                    if (data) {
+                        familyMembers.value = data;
+                        // 預設全選所有成員
+                        if (selectedBeneficiaries.value.length === 0) {
+                            selectedBeneficiaries.value = data.map(m => m.id);
+                        }
+                    }
+                };
+                const loadFamilyFromDb = async (id) => { const { data } = await db.from('families').select('*').eq('id', id).single(); return data; };
+
+                const saveToLocal = () => { localStorage.setItem('familyFinance', JSON.stringify({ familyId: familyId.value, familyName: familyName.value, currentUser, budget: budget.value, publicWallet: publicWallet.value })); };
+                const loadFromLocal = () => { const data = localStorage.getItem('familyFinance'); if (data) { const p = JSON.parse(data); familyId.value = p.familyId || ''; familyName.value = p.familyName || ''; Object.assign(currentUser, p.currentUser || {}); budget.value = p.budget || 10000; publicWallet.value = p.publicWallet || 0; return !!p.familyId; } return false; };
+
+                const toggleMode = () => { mode.value = mode.value === 'personal' ? 'shared' : 'personal'; transactionType.value = 'expense'; };
+                const getCalcKeyClass = (key) => {
+                    if (key === 'confirm') return 'bg-gradient-to-br from-green-400 to-emerald-500 text-white shadow-lg shadow-green-200';
+                    if (key === 'backspace') return 'bg-gradient-to-br from-red-400 to-rose-500 text-white shadow-lg shadow-red-200';
+                    if (['+', '-'].includes(key)) return 'bg-gradient-to-br from-blue-400 to-indigo-500 text-white shadow-lg shadow-blue-200';
+                    return 'bg-white text-slate-700 border border-slate-200 shadow-sm hover:bg-slate-50';
+                };
+                const handleCalcKey = (key) => { if (key === 'backspace') calcDisplay.value = calcDisplay.value.slice(0, -1); else if (key === 'confirm') saveTransaction(); else calcDisplay.value += key; };
+
+                const saveTransaction = async () => {
+                    if (!selectedCategory.value) { showToast('請選擇類別', 'error'); return; }
+                    if (!calcDisplay.value) { showToast('請輸入金額', 'error'); return; }
+
+                    const isShared = mode.value === 'shared';
+
+                    // 共享模式必須選擇分帳對象
+                    if (isShared && selectedBeneficiaries.value.length === 0) {
+                        showToast('請選擇分帳對象', 'error');
+                        return;
+                    }
+
+                    try {
+                        const amount = eval(calcDisplay.value);
+                        if (isNaN(amount) || amount <= 0) { showToast('請輸入有效金額', 'error'); return; }
+
+                        const isAdvance = isShared && payer.value === 'me' && transactionType.value === 'expense';  // 情況A
+                        const isPublicPay = isShared && payer.value === 'public' && transactionType.value === 'expense';  // 情況B
+
+                        // 計算每人分擔金額
+                        const beneficiaries = isShared ? [...selectedBeneficiaries.value] : [currentUser.id];
+                        const splitAmt = amount / beneficiaries.length;
+
+                        // 計算其他人欠我多少（不包括自己）
+                        const othersOweMe = isAdvance && beneficiaries.includes(currentUser.id)
+                            ? splitAmt * (beneficiaries.length - 1)
+                            : (isAdvance ? amount : 0);
+
+                        const tx = {
+                            id: Date.now().toString(),
+                            amount: Math.round(amount * 100) / 100,
+                            date: new Date(selectedDate.value + 'T12:00:00').toISOString(),
+                            note: transactionNote.value,
+                            category_id: selectedCategory.value.id,
+                            mode: mode.value,
+                            type: transactionType.value,
+                            payer_id: isPublicPay ? 'public' : currentUser.id,
+                            payer_name: isPublicPay ? '公家錢包' : currentUser.name,
+                            beneficiary_ids: beneficiaries,
+                            split_amount: Math.round(splitAmt * 100) / 100,
+                            is_advance: isAdvance,
+                            is_settled: false,
+                            family_id: familyId.value
+                        };
+
+                        // 情況B：從公家錢包扣款
+                        if (isPublicPay) {
+                            publicWallet.value -= amount;
+                            saveToLocal();
+                            saveFamilyToDb();
+                        }
+
+                        transactions.value.unshift(tx);
+                        await saveTransactionToDb(tx);
+
+                        calcDisplay.value = '';
+                        transactionNote.value = '';
+                        selectedCategory.value = null;
+                        // 重設分帳對象為全選
+                        selectedBeneficiaries.value = familyMembers.value.map(m => m.id);
+
+                        if (isAdvance && othersOweMe > 0) {
+                            showToast(`已記錄！他們欠您 $${Math.round(othersOweMe)}`, 'success');
+                        } else if (isPublicPay) {
+                            showToast(`已從公家錢包扣除 $${amount}`, 'success');
+                        } else {
+                            showToast('儲存成功！', 'success');
+                        }
+                    } catch (e) {
+                        console.error('儲存錯誤:', e);
+                        showToast('計算錯誤', 'error');
+                    }
+                };
+
+                // 情況C：結清債務 (舊版-公家欠款)
+                const settleDebt = async (debt) => {
+                    if (publicWallet.value < debt.amount) {
+                        showToast('公家錢包餘額不足！', 'error');
+                        return;
+                    }
+
+                    // 扣除公家錢包
+                    publicWallet.value -= debt.amount;
+
+                    // 標記所有該用戶的墊款為已結清
+                    transactions.value.filter(tx => tx.mode === 'shared' && tx.is_advance && !tx.is_settled && tx.payer_id === debt.userId).forEach(async tx => {
+                        tx.is_settled = true;
+                        await saveTransactionToDb(tx);
+                    });
+
+                    // 新增一筆結清記錄
+                    const settleTx = {
+                        id: Date.now().toString(),
+                        amount: debt.amount,
+                        date: new Date().toISOString(),
+                        note: `結清給 ${debt.userName}`,
+                        category_id: 'other',
+                        mode: 'shared',
+                        type: 'expense',
+                        payer_id: 'public',
+                        payer_name: '公家錢包',
+                        beneficiary_ids: [debt.userId],
+                        is_advance: false,
+                        is_settled: true,
+                        is_settlement: true,  // 結清交易標記
+                        family_id: familyId.value
+                    };
+                    transactions.value.unshift(settleTx);
+                    await saveTransactionToDb(settleTx);
+
+                    saveToLocal();
+                    saveFamilyToDb();
+                    showToast(`已結清 ${debt.userName} $${debt.amount}`, 'success');
+                };
+
+                // 結清個別債務（誰欠誰）
+                const settlePersonalDebt = async (debt) => {
+                    // 找到涉及這個債務人和債權人的所有交易，標記為已結清
+                    const relevantTxs = transactions.value.filter(tx =>
+                        tx.mode === 'shared' &&
+                        tx.is_advance &&
+                        !tx.is_settled &&
+                        tx.payer_id === debt.creditorId &&
+                        tx.beneficiary_ids?.includes(debt.debtorId)
+                    );
+
+                    for (const tx of relevantTxs) {
+                        // 計算這筆交易中，債務人欠債權人的金額
+                        const splitAmt = tx.amount / tx.beneficiary_ids.length;
+
+                        // 如果交易只有一個受益人，直接標記已結清
+                        if (tx.beneficiary_ids.length === 1 ||
+                            tx.beneficiary_ids.every(id => id === debt.debtorId || id === tx.payer_id)) {
+                            tx.is_settled = true;
+                            await saveTransactionToDb(tx);
+                        }
+                        // 否則需要更複雜的部分結清邏輯（這裡簡化處理）
+                    }
+
+                    // 新增結清記錄
+                    const settleTx = {
+                        id: Date.now().toString(),
+                        amount: Math.round(debt.amount * 100) / 100,
+                        date: new Date().toISOString(),
+                        note: `${debt.debtorName} 還錢給 ${debt.creditorName}`,
+                        category_id: 'other',
+                        mode: 'shared',
+                        type: 'expense',
+                        payer_id: debt.debtorId,
+                        payer_name: debt.debtorName,
+                        beneficiary_ids: [debt.creditorId],
+                        is_advance: false,
+                        is_settled: true,
+                        is_settlement: true,
+                        family_id: familyId.value
+                    };
+                    transactions.value.unshift(settleTx);
+                    await saveTransactionToDb(settleTx);
+
+                    showToast(`${debt.debtorName} 已還清 ${debt.creditorName} $${Math.round(debt.amount)}`, 'success');
+                };
+
+                // 情況D：入錢到公家錢包
+                const topUpWallet = async () => {
+                    if (!topUpAmount.value || topUpAmount.value <= 0) { showToast('請輸入金額', 'error'); return; }
+
+                    publicWallet.value += topUpAmount.value;
+
+                    const tx = {
+                        id: Date.now().toString(),
+                        amount: topUpAmount.value,
+                        date: new Date().toISOString(),
+                        note: topUpNote.value || '入錢到公家錢包',
+                        category_id: 'topup',
+                        mode: 'shared',
+                        type: 'income',
+                        payer_id: currentUser.id,
+                        payer_name: currentUser.name,
+                        beneficiary_ids: ['all'],
+                        is_advance: false,
+                        is_settled: true,
+                        family_id: familyId.value
+                    };
+
+                    transactions.value.unshift(tx);
+                    await saveTransactionToDb(tx);
+
+                    saveToLocal();
+                    saveFamilyToDb();
+                    showTopUp.value = false;
+                    topUpAmount.value = 0;
+                    topUpNote.value = '';
+                    showToast(`已入錢 $${tx.amount} 到公家錢包`, 'success');
+                };
+
+                const deleteTransaction = async (tx) => {
+                    // 如果是公家錢包支出，要退回餘額
+                    if (tx.mode === 'shared' && tx.payer_id === 'public' && tx.type === 'expense') {
+                        publicWallet.value += tx.amount;
+                        saveToLocal();
+                        saveFamilyToDb();
+                    }
+                    // 如果是入錢，要扣回
+                    if (tx.mode === 'shared' && tx.type === 'income' && tx.category_id === 'topup') {
+                        publicWallet.value -= tx.amount;
+                        saveToLocal();
+                        saveFamilyToDb();
+                    }
+                    transactions.value = transactions.value.filter(t => t.id !== tx.id);
+                    await deleteTransactionFromDb(tx.id);
+                    showToast('已刪除', 'success');
+                };
+
+                const addRecurring = async () => {
+                    if (!newRecurring.name || !newRecurring.amount) { showToast('請填寫完整', 'error'); return; }
+                    const item = {
+                        id: Date.now().toString(),
+                        name: newRecurring.name,
+                        amount: newRecurring.amount,
+                        cron_day: newRecurring.cron_day || 1,
+                        mode: newRecurring.mode || 'personal',
+                        family_id: familyId.value
+                    };
+                    recurringItems.value.push(item);
+                    await saveRecurringToDb(item);
+                    showAddRecurring.value = false;
+                    newRecurring.name = ''; newRecurring.amount = 0; newRecurring.cron_day = 1; newRecurring.mode = 'personal';
+                    showToast('已新增固定支出', 'success');
+                };
+
+                const deleteRecurring = async (item) => {
+                    if (!confirm(`確定要刪除「${item.name}」嗎？`)) return;
+                    recurringItems.value = recurringItems.value.filter(r => r.id !== item.id);
+                    if (db) await db.from('recurring').delete().eq('id', item.id);
+                    showToast('已刪除固定支出', 'success');
+                };
+
+                const checkRecurring = () => {
+                    const today = new Date().getDate();
+                    let added = 0;
+                    recurringItems.value.forEach(item => {
+                        if (item.cron_day === today) {
+                            const tx = { id: Date.now().toString() + Math.random(), amount: item.amount, date: new Date().toISOString(), note: item.name + ' (固定)', category_id: 'other', mode: mode.value, type: 'expense', payer_id: currentUser.id, payer_name: currentUser.name, is_advance: mode.value === 'shared', is_settled: false, family_id: familyId.value };
+                            transactions.value.unshift(tx);
+                            saveTransactionToDb(tx);
+                            added++;
+                        }
+                    });
+                    showToast(added > 0 ? `已新增 ${added} 筆` : '今日無到期', 'success');
+                };
+
+                const exportCSV = () => {
+                    const headers = ['日期', '類別', '金額', '類型', '模式', '付款人', '備註', '狀態'];
+                    const rows = transactions.value.map(tx => [
+                        new Date(tx.date).toLocaleDateString('zh-TW'),
+                        getCategoryName(tx.category_id),
+                        tx.amount,
+                        tx.type === 'expense' ? '支出' : '收入',
+                        tx.mode === 'personal' ? '個人' : '共享',
+                        tx.payer_name || '',
+                        tx.note || '',
+                        tx.is_settled ? '已結清' : (tx.is_advance ? '待結清' : '')
+                    ]);
+                    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+                    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = `記帳_${new Date().toLocaleDateString('zh-TW')}.csv`;
+                    link.click();
+                };
+
+                const createFamily = async () => {
+                    if (!newFamilyName.value || !newFamilyPin.value || !newUserName.value) { showToast('請填寫完整', 'error'); return; }
+                    creatingFamily.value = true;
+                    familyId.value = 'FAM-' + Math.random().toString(36).substr(2, 8).toUpperCase();
+                    familyName.value = newFamilyName.value;
+                    currentUser.id = 'USR-' + Date.now();
+                    currentUser.name = newUserName.value;
+                    categories.value = [...defaultCategories];
+                    publicWallet.value = 0;
+                    if (db) {
+                        try {
+                            await db.from('families').insert({ id: familyId.value, name: familyName.value, pin_code: newFamilyPin.value, budget: budget.value, public_wallet: 0, created_at: new Date().toISOString() });
+                            await db.from('users').insert({ id: currentUser.id, name: currentUser.name, family_id: familyId.value });
+                            subscribeToData();
+                        } catch (e) { showToast('建立失敗: ' + e.message, 'error'); creatingFamily.value = false; return; }
+                    }
+                    saveToLocal();
+                    isLoggedIn.value = true;
+                    showCreateFamily.value = false;
+                    creatingFamily.value = false;
+                    showToast('建立成功！Room ID: ' + familyId.value, 'success');
+                };
+
+                const joinFamily = async () => {
+                    if (!joinRoomId.value || !joinPin.value || !newUserName.value) { showToast('請填寫完整', 'error'); return; }
+                    joiningFamily.value = true;
+                    console.log('嘗試加入家庭:', joinRoomId.value);
+                    if (db) {
+                        try {
+                            const family = await loadFamilyFromDb(joinRoomId.value.trim());
+                            console.log('查詢結果:', family);
+                            if (!family) {
+                                showToast('找不到家庭 (Room ID: ' + joinRoomId.value + ')', 'error');
+                                joiningFamily.value = false;
+                                return;
+                            }
+                            // 比對 PIN 碼時忽略空格
+                            if (family.pin_code?.trim() !== joinPin.value?.trim()) {
+                                console.log('PIN 比對失敗:', family.pin_code, 'vs', joinPin.value);
+                                showToast('PIN 碼錯誤', 'error');
+                                joiningFamily.value = false;
+                                return;
+                            }
+                            familyId.value = family.id;
+                            familyName.value = family.name;
+                            budget.value = family.budget || 10000;
+                            publicWallet.value = family.public_wallet || 0;
+                            categories.value = family.categories || [...defaultCategories];
+
+                            // 檢查同名用戶
+                            const { data: existingUsers } = await db.from('users').select('*').eq('family_id', family.id).ilike('name', newUserName.value.trim());
+                            if (existingUsers && existingUsers.length > 0) {
+                                // 已有同名用戶，直接使用該 ID
+                                const existingUser = existingUsers[0];
+                                currentUser.id = existingUser.id;
+                                currentUser.name = existingUser.name;
+                                console.log('找到現有用戶，使用 ID:', existingUser.id);
+                                showToast('歡迎回來，' + existingUser.name + '！', 'success');
+                            } else {
+                                // 新用戶
+                                currentUser.id = 'USR-' + Date.now();
+                                currentUser.name = newUserName.value;
+                                await db.from('users').insert({ id: currentUser.id, name: currentUser.name, family_id: familyId.value, updated_at: new Date().toISOString() });
+                                showToast('加入成功！', 'success');
+                            }
+                            subscribeToData();
+                        } catch (error) {
+                            console.error('加入家庭錯誤:', error);
+                            showToast('加入失敗: ' + error.message, 'error');
+                            joiningFamily.value = false;
+                            return;
+                        }
+                    }
+                    saveToLocal();
+                    isLoggedIn.value = true;
+                    showJoinFamily.value = false;
+                    joiningFamily.value = false;
+                };
+
+                const logout = () => { if (channel) channel.unsubscribe(); localStorage.removeItem('familyFinance'); location.reload(); };
+                const showToast = (message, type = 'success') => { toast.message = message; toast.type = type; toast.icon = type === 'success' ? 'ri-check-line' : 'ri-error-warning-line'; toast.show = true; setTimeout(() => { toast.show = false; }, 3000); };
+
+                const renderChart = () => {
+                    nextTick(() => {
+                        const ctx = document.getElementById('expenseChart')?.getContext('2d');
+                        if (!ctx) return;
+                        const data = {};
+                        // 個人模式：只統計自己的支出；共享模式：統計所有共享支出
+                        transactions.value.filter(tx => {
+                            if (tx.type !== 'expense') return false;
+                            if (mode.value === 'personal') {
+                                return tx.mode === 'personal' && tx.payer_id === currentUser.id;
+                            }
+                            return tx.mode === 'shared';
+                        }).forEach(tx => {
+                            const n = getCategoryName(tx.category_id);
+                            data[n] = (data[n] || 0) + tx.amount;
+                        });
+                        new Chart(ctx, { type: 'doughnut', data: { labels: Object.keys(data), datasets: [{ data: Object.values(data), backgroundColor: ['#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#3b82f6', '#8b5cf6', '#ec4899'] }] }, options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { color: '#64748b' } } } } });
+                    });
+                };
+
+                onMounted(async () => {
+                    loadingMessage.value = '連接資料庫...';
+                    initSupabase();
+                    categories.value = [...defaultCategories];
+                    loadingMessage.value = '載入資料...';
+                    const hasLocal = loadFromLocal();
+                    if (hasLocal && familyId.value && db) {
+                        isLoggedIn.value = true;
+                        const family = await loadFamilyFromDb(familyId.value);
+                        if (family) { familyName.value = family.name; budget.value = family.budget || 10000; publicWallet.value = family.public_wallet || 0; }
+                        subscribeToData();
+                    }
+                    loading.value = false;
+                });
+
+                return {
+                    loading, loadingMessage, isLoggedIn, mode, activeTab, transactionType, selectedCategory, calcDisplay, transactionNote, searchQuery, budget, payer, publicWallet,
+                    selectedDate, showDatePicker, selectedMonth,
+                    showCreateFamily, showJoinFamily, showAddRecurring, showTopUp, creatingFamily, joiningFamily,
+                    newFamilyName, newFamilyPin, newUserName, joinRoomId, joinPin, newRecurring, topUpAmount, topUpNote,
+                    familyId, familyName, currentUser, transactions, categories, recurringItems, debtList, toast, tabs, calcKeys,
+                    familyMembers, selectedBeneficiaries, allSelected, splitAmount,
+                    filteredCategories, filteredRecurring, groupedTransactions, stats, monthStats, budgetPercent, dbReady, syncing,
+                    pickerYear, pickerMonth, calendarDays,
+                    toggleMode, getCalcKeyClass, handleCalcKey, saveTransaction, getCategoryIcon, getCategoryName, getDayTotal, getMemberName,
+                    formatDisplayDate, changeMonth, changePickerMonth, selectDate, getDateClass,
+                    toggleBeneficiary, toggleAllBeneficiaries,
+                    deleteTransaction, addRecurring, deleteRecurring, checkRecurring, settleDebt, settlePersonalDebt, topUpWallet, exportCSV,
+                    createFamily, joinFamily, logout, saveFamilyToDb, saveUserToDb, renderChart
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+
+</html>
