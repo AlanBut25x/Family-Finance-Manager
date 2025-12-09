@@ -978,10 +978,21 @@
                 const saveTransactionToDb = async (tx) => { if (db && familyId.value) await db.from('transactions').upsert(tx); };
                 const deleteTransactionFromDb = async (id) => { if (db) await db.from('transactions').delete().eq('id', id); };
                 const saveRecurringToDb = async (item) => { if (db) await db.from('recurring').upsert(item); };
-                const saveFamilyToDb = async () => {
+                const saveFamilyToDb = async (silent = false) => {
                     if (db && familyId.value) {
-                        await db.from('families').upsert({ id: familyId.value, name: familyName.value, budget: budget.value, public_wallet: publicWallet.value, updated_at: new Date().toISOString() });
-                        showToast('已儲存', 'success');
+                        try {
+                            await db.from('families').upsert({
+                                id: familyId.value,
+                                name: familyName.value,
+                                budget: budget.value,
+                                public_wallet: publicWallet.value,
+                                updated_at: new Date().toISOString()
+                            });
+                            if (!silent) showToast('已儲存', 'success');
+                        } catch (e) {
+                            console.error('儲存失敗:', e);
+                            showToast('儲存失敗', 'error');
+                        }
                     }
                 };
                 const saveUserToDb = async () => {
@@ -1076,7 +1087,7 @@
                         if (isPublicPay) {
                             publicWallet.value -= amount;
                             saveToLocal();
-                            saveFamilyToDb();
+                            await saveFamilyToDb(true);
                         }
 
                         transactions.value.unshift(tx);
@@ -1138,7 +1149,7 @@
                     await saveTransactionToDb(settleTx);
 
                     saveToLocal();
-                    saveFamilyToDb();
+                    await saveFamilyToDb(true);
                     showToast(`已結清 ${debt.userName} $${debt.amount}`, 'success');
                 };
 
@@ -1215,7 +1226,7 @@
                     await saveTransactionToDb(tx);
 
                     saveToLocal();
-                    saveFamilyToDb();
+                    await saveFamilyToDb(true);  // silent mode，不顯示 Toast
                     showTopUp.value = false;
                     topUpAmount.value = 0;
                     topUpNote.value = '';
@@ -1227,13 +1238,13 @@
                     if (tx.mode === 'shared' && tx.payer_id === 'public' && tx.type === 'expense') {
                         publicWallet.value += tx.amount;
                         saveToLocal();
-                        saveFamilyToDb();
+                        await saveFamilyToDb(true);
                     }
                     // 如果是入錢，要扣回
                     if (tx.mode === 'shared' && tx.type === 'income' && tx.category_id === 'topup') {
                         publicWallet.value -= tx.amount;
                         saveToLocal();
-                        saveFamilyToDb();
+                        await saveFamilyToDb(true);
                     }
                     transactions.value = transactions.value.filter(t => t.id !== tx.id);
                     await deleteTransactionFromDb(tx.id);
