@@ -292,8 +292,10 @@
                                 <div class="text-right flex-shrink-0">
                                     <span class="font-bold text-lg"
                                         :class="tx.type === 'expense' ? 'text-red-500' : 'text-green-500'">
-                                        {{ tx.type === 'expense' ? '-' : '' }}${{ tx.amount }}
+                                        {{ tx.type === 'expense' ? '-' : '+' }}${{ tx.amount }}
                                     </span>
+                                    <button @click="deleteTransaction(tx)"
+                                        class="block text-xs text-slate-400 hover:text-red-500 mt-0.5">刪除</button>
                                 </div>
                             </div>
                         </div>
@@ -981,16 +983,26 @@
                 const saveFamilyToDb = async (silent = false) => {
                     if (db && familyId.value) {
                         try {
-                            await db.from('families').upsert({
+                            console.log('💾 正在保存家庭資料...', {
+                                id: familyId.value,
+                                public_wallet: publicWallet.value
+                            });
+                            const { error } = await db.from('families').upsert({
                                 id: familyId.value,
                                 name: familyName.value,
                                 budget: budget.value,
                                 public_wallet: publicWallet.value,
                                 updated_at: new Date().toISOString()
                             });
-                            if (!silent) showToast('已儲存', 'success');
+                            if (error) {
+                                console.error('❌ 儲存失敗:', error);
+                                showToast('儲存失敗: ' + error.message, 'error');
+                            } else {
+                                console.log('✅ 家庭資料保存成功，公家錢包:', publicWallet.value);
+                                if (!silent) showToast('已儲存', 'success');
+                            }
                         } catch (e) {
-                            console.error('儲存失敗:', e);
+                            console.error('❌ 儲存異常:', e);
                             showToast('儲存失敗', 'error');
                         }
                     }
